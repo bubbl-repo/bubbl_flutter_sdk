@@ -1,162 +1,83 @@
-# Bubbl Flutter SDK Internal Packaging and Distribution Guide
+# Bubbl Flutter SDK Internal Release Guide (pub.dev)
 
-This document defines how we package and distribute `bubbl_flutter_sdk` for internal and partner app teams.
+This document defines how to release `bubbl_flutter_sdk` to pub.dev.
 
 ## Scope
 
-- Flutter plugin package: `sdk/bubbl_flutter_sdk`
-- Android native dependency consumed by plugin: `tech.bubbl:bubbl-sdk`
-- iOS native dependency consumed by plugin: `BubblSDK`
+- Package root: `/Users/jackwright/Projects/bubbl-current/sdk/bubbl_flutter_sdk`
+- Public package name: `bubbl_flutter_sdk`
+- Hosted registry: `https://pub.dev`
 
-## Current dependency pins
+## One-time setup (per machine)
 
-- Flutter plugin version: `pubspec.yaml` (`version`)
-- Android native SDK: `android/build.gradle.kts` (`implementation("tech.bubbl:bubbl-sdk:...")`)
-- iOS native SDK: `ios/bubbl_flutter_sdk.podspec` (`s.dependency 'BubblSDK', '...'`)
-- Podspec version: `ios/bubbl_flutter_sdk.podspec` (`s.version`)
+1. Install Flutter/Dart and verify:
 
-Keep these in sync for each release.
+```bash
+flutter --version
+dart --version
+```
 
-## Release strategy
+2. Log in to pub.dev:
 
-Recommended: distribute by Git tag from this monorepo.
+```bash
+dart pub login
+```
 
-Why:
-- plugin depends on private/native artifacts (GitHub Packages Maven + private BubblSDK pod source in host app)
-- internal teams can pin exact commits/tags
-- easy rollback by reverting dependency ref
+The command opens an OAuth flow in the browser and stores credentials locally.
 
-## Pre-release checklist
+## Release checklist
 
-1. Confirm native SDK versions to ship
-- Android SDK version is published and consumable in GitHub Packages
-- iOS BubblSDK tag exists and is installable via CocoaPods
+1. Update release metadata:
+- Bump `version` in `pubspec.yaml` (semantic versioning).
+- Add release notes in `CHANGELOG.md` with the same version.
 
-2. Update versions and metadata
-- bump `sdk/bubbl_flutter_sdk/pubspec.yaml` `version`
-- bump `sdk/bubbl_flutter_sdk/ios/bubbl_flutter_sdk.podspec` `s.version`
-- update native pins when required:
-  - `sdk/bubbl_flutter_sdk/android/build.gradle.kts`
-  - `sdk/bubbl_flutter_sdk/ios/bubbl_flutter_sdk.podspec`
-- update `sdk/bubbl_flutter_sdk/CHANGELOG.md`
-- update SDK docs if API/behavior changed
-
-3. Run package quality gates
+2. Run quality gates:
 
 ```bash
 cd /Users/jackwright/Projects/bubbl-current/sdk/bubbl_flutter_sdk
-flutter clean
 flutter pub get
 flutter analyze
 flutter test
+flutter pub publish --dry-run
 ```
 
-Optional stricter check:
+3. Confirm publish payload:
+- Ensure internal-only files are excluded.
+- `.pubignore` currently excludes `internal.md`.
+
+4. Publish:
 
 ```bash
-dart format --set-exit-if-changed lib test
+cd /Users/jackwright/Projects/bubbl-current/sdk/bubbl_flutter_sdk
+flutter pub publish --force
 ```
 
-4. Run example app smoke checks
+5. Verify release:
+- Check package page: `https://pub.dev/packages/bubbl_flutter_sdk`.
+- Confirm the new version appears under the Versions tab.
+
+6. Tag source control for traceability:
 
 ```bash
-cd /Users/jackwright/Projects/bubbl-current/apps/bubbl-flutter
-flutter clean
-flutter pub get
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
 ```
 
-Android:
-
-```bash
-cd /Users/jackwright/Projects/bubbl-current/apps/bubbl-flutter
-flutter run -d android
-```
-
-iOS:
-
-```bash
-cd /Users/jackwright/Projects/bubbl-current/apps/bubbl-flutter/ios
-pod install
-cd /Users/jackwright/Projects/bubbl-current/apps/bubbl-flutter
-flutter run -d ios
-```
-
-5. Validate runtime behavior (both platforms)
-- `boot` succeeds
-- permission flow works
-- `startLocationTracking` succeeds
-- geofence stream emits data after refresh
-- notification stream receives payloads
-- survey methods (`trackSurveyEvent`, `submitSurveyResponse`) succeed
-- device log stream (`startDeviceLogStream`) emits snapshots
-
-## Tag and publish process
-
-1. Commit release changes
-
-```bash
-cd <repo-root-containing-sdk>
-git add sdk/bubbl_flutter_sdk docs/bubbl-docs-redocly/guides
-git commit -m "release(flutter-sdk): vX.Y.Z"
-```
-
-2. Create and push release tag
-
-```bash
-git tag flutter-sdk-vX.Y.Z
-git push origin flutter-sdk-vX.Y.Z
-```
-
-3. Announce installation snippet to consumers (Git dependency)
+## Customer install snippet after publish
 
 ```yaml
 dependencies:
-  bubbl_flutter_sdk:
-    git:
-      url: git@github.com:bubbl-repo/bubbl-current.git
-      path: sdk/bubbl_flutter_sdk
-      ref: flutter-sdk-vX.Y.Z
+  bubbl_flutter_sdk: ^X.Y.Z
 ```
 
-## Consumer prerequisites
+## Hotfix release process
 
-### Android
+1. Branch from the release commit or `main`.
+2. Apply fix and bump patch version (`X.Y.Z+1`).
+3. Update `CHANGELOG.md`.
+4. Re-run the checklist and publish again.
 
-Consumers must provide GitHub Packages credentials for `tech.bubbl:bubbl-sdk`.
+## Notes
 
-`~/.gradle/gradle.properties` or project `android/gradle.properties`:
-
-```properties
-GITHUB_USERNAME=your-github-username
-GITHUB_TOKEN=your-github-token
-```
-
-### iOS
-
-Host app `ios/Podfile` must include `BubblSDK` source (Git pod currently):
-
-```ruby
-pod 'BubblSDK', :git => 'https://github.com/bubbl-repo/bubbl-ios-sdk.git', :tag => '2.1.6'
-```
-
-Then run:
-
-```bash
-cd ios
-pod install
-```
-
-## Rollback
-
-1. Revert consumer app to previous plugin tag/ref.
-2. Run `flutter pub get`.
-3. Re-run smoke tests.
-4. If native pin changed, also verify Android/iOS dependency resolution and pod install.
-
-## Known behavior notes
-
-- Dart `BubblEnvironment` includes `development`, `staging`, `production`.
-- Android bridge currently maps only `PRODUCTION` explicitly; any other value falls back to `STAGING`.
-- iOS bridge supports `DEVELOPMENT`, `STAGING`, and `PRODUCTION`.
-
-If true development environment parity is required across platforms, update Android environment parsing before release.
+- pub.dev packages are public.
+- Unpublishing is restricted by pub.dev policy, so verify dry-run output carefully before publish.
