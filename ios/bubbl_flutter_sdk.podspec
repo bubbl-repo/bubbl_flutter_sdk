@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'bubbl_flutter_sdk'
-  s.version          = '0.0.1'
+  s.version          = '2.2.0'
   s.summary          = 'Flutter wrapper for Bubbl native iOS and Android SDKs.'
   s.description      = <<-DESC
 Flutter plugin that wraps Bubbl native SDK APIs for bootstrapping, geofence updates,
@@ -13,7 +13,7 @@ notifications, surveys, and analytics.
   s.source_files     = 'Classes/**/*'
 
   s.dependency 'Flutter'
-  s.dependency 'BubblSDK', '2.1.6'
+  s.dependency 'BubblSDK', '2.2.0'
   s.dependency 'FirebaseCore'
   s.dependency 'Firebase/Messaging'
 

@@ -385,12 +385,20 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
       payload["mediaType"] = mediaType
     }
 
+    if let media = buildMediaArray(mediaURL: details.mediaURL, mediaType: details.mediaType) {
+      payload["media"] = media
+    }
+
     if let ctaLabel = details.ctaLabel {
       payload["ctaLabel"] = ctaLabel
     }
 
     if let ctaURL = details.ctaURL {
       payload["ctaUrl"] = ctaURL
+    }
+
+    if let cta = buildCTAArray(label: details.ctaLabel, url: details.ctaURL) {
+      payload["cta"] = cta
     }
 
     if let completionMessage = details.completionMessage {
@@ -456,7 +464,9 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
       payload,
       keys: [
         "id",
+        "nId",
         "n_id",
+        "cnId",
         "notification_id",
         "notificationId",
         "curatedNotificationID",
@@ -471,7 +481,7 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
       out["headline"] = headline
     }
 
-    if let body = firstStringValue(payload, keys: ["body", "message", "notificationBody"]) {
+    if let body = firstStringValue(payload, keys: ["body", "message", "notificationBody", "con"]) {
       out["body"] = body
     }
 
@@ -483,9 +493,27 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
       out["mediaType"] = mediaType
     }
 
+    if let media = normalizeMedia(payload["media"]) {
+      out["media"] = media
+      if let firstMedia = media.first {
+        if out["mediaType"] == nil,
+           let mediaType = firstMedia["type"] as? String,
+           !mediaType.isEmpty
+        {
+          out["mediaType"] = mediaType
+        }
+        if out["mediaUrl"] == nil,
+           let mediaURL = firstMedia["url"] as? String,
+           !mediaURL.isEmpty
+        {
+          out["mediaUrl"] = mediaURL
+        }
+      }
+    }
+
     if let activation = firstStringValue(
       payload,
-      keys: ["activation", "geofence_activation", "geofenceActivation", "trigger", "eventType", "event_type"]
+      keys: ["activation", "geofence_activation", "geofenceActivation", "trigger", "eventType", "event_type", "event"]
     ) {
       out["activation"] = activation
     }
@@ -498,11 +526,35 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
       out["ctaUrl"] = ctaURL
     }
 
-    if let locationId = firstValue(payload, keys: ["locationId", "location_id", "locationID", "location_id_str"]) {
+    if let cta = normalizeCTA(payload["cta"]) {
+      out["cta"] = cta
+      if let firstCTA = cta.first {
+        if out["ctaLabel"] == nil,
+           let ctaLabel = firstCTA["label"] as? String,
+           !ctaLabel.isEmpty
+        {
+          out["ctaLabel"] = ctaLabel
+        }
+        if out["ctaUrl"] == nil,
+           let ctaURL = firstCTA["url"] as? String,
+           !ctaURL.isEmpty
+        {
+          out["ctaUrl"] = ctaURL
+        }
+      }
+    }
+
+    if let locationId = firstValue(
+      payload,
+      keys: ["locationId", "location_id", "locationID", "location_id_str", "locId", "loc_id", "location"]
+    ) {
       out["locationId"] = locationId
     }
 
-    if let campaignId = firstValue(payload, keys: ["campaignId", "campaign_id", "geofenceId", "geofence_id"]) {
+    if let campaignId = firstValue(
+      payload,
+      keys: ["campaignId", "campaign_id", "campaignIdPrimary", "geofenceId", "geofence_id", "cId"]
+    ) {
       out["campaignId"] = campaignId
     }
 
@@ -641,6 +693,130 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
     }
 
     return nil
+  }
+
+  private func normalizeJSONArray(_ value: Any?) -> [Any]? {
+    guard let value = value else { return nil }
+
+    if let array = value as? [Any] {
+      return array
+    }
+
+    if let dictionary = value as? [String: Any] {
+      return [dictionary]
+    }
+
+    if let dictionary = value as? NSDictionary {
+      return [dictionary]
+    }
+
+    if let string = value as? String,
+       let data = string.data(using: .utf8),
+       let parsed = try? JSONSerialization.jsonObject(with: data)
+    {
+      if let parsedArray = parsed as? [Any] {
+        return parsedArray
+      }
+
+      if let parsedDictionary = parsed as? [String: Any] {
+        return [parsedDictionary]
+      }
+    }
+
+    return nil
+  }
+
+  private func normalizeMedia(_ value: Any?) -> [[String: Any]]? {
+    guard let array = normalizeJSONArray(value) else { return nil }
+
+    var normalized: [[String: Any]] = []
+
+    for item in array {
+      let media: [String: Any]
+      if let dictionary = item as? [String: Any] {
+        media = dictionary
+      } else if let dictionary = item as? NSDictionary, let cast = dictionary as? [String: Any] {
+        media = cast
+      } else {
+        continue
+      }
+
+      var mapped: [String: Any] = [:]
+
+      if let type = firstStringValue(media, keys: ["type", "mediaType", "media_type"]) {
+        mapped["type"] = type
+      }
+
+      if let url = firstStringValue(media, keys: ["url", "mediaUrl", "mediaURL", "media_url"]) {
+        mapped["url"] = url
+      }
+
+      if !mapped.isEmpty {
+        normalized.append(mapped)
+      }
+    }
+
+    return normalized.isEmpty ? nil : normalized
+  }
+
+  private func normalizeCTA(_ value: Any?) -> [[String: Any]]? {
+    guard let array = normalizeJSONArray(value) else { return nil }
+
+    var normalized: [[String: Any]] = []
+
+    for item in array {
+      let cta: [String: Any]
+      if let dictionary = item as? [String: Any] {
+        cta = dictionary
+      } else if let dictionary = item as? NSDictionary, let cast = dictionary as? [String: Any] {
+        cta = cast
+      } else {
+        continue
+      }
+
+      var mapped: [String: Any] = [:]
+
+      if let label = firstStringValue(cta, keys: ["label", "ctaLabel", "cta_label"]) {
+        mapped["label"] = label
+      }
+
+      if let url = firstStringValue(cta, keys: ["url", "ctaUrl", "cta_url"]) {
+        mapped["url"] = url
+      }
+
+      if !mapped.isEmpty {
+        normalized.append(mapped)
+      }
+    }
+
+    return normalized.isEmpty ? nil : normalized
+  }
+
+  private func buildMediaArray(mediaURL: String?, mediaType: String?) -> [[String: Any]]? {
+    guard let mediaURL, !mediaURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return nil
+    }
+
+    var mediaItem: [String: Any] = ["url": mediaURL]
+    if let mediaType, !mediaType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      mediaItem["type"] = mediaType
+    }
+
+    return [mediaItem]
+  }
+
+  private func buildCTAArray(label: String?, url: String?) -> [[String: Any]]? {
+    var ctaItem: [String: Any] = [:]
+
+    if let label, !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      ctaItem["label"] = label
+    }
+
+    if let url, !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      ctaItem["url"] = url
+    }
+
+    return ctaItem.isEmpty ? nil : [ctaItem]
   }
 
   private func normalizeQuestions(_ value: Any?) -> [[String: Any]]? {
