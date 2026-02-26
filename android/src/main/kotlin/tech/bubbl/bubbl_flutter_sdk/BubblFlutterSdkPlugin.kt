@@ -12,6 +12,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.location.Location
+import android.os.Bundle
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -63,7 +64,8 @@ class BubblFlutterSdkPlugin :
     FlutterPlugin,
     MethodChannel.MethodCallHandler,
     ActivityAware,
-    PluginRegistry.RequestPermissionsResultListener {
+    PluginRegistry.RequestPermissionsResultListener,
+    PluginRegistry.NewIntentListener {
 
     private lateinit var applicationContext: Context
     private lateinit var methodChannel: MethodChannel
@@ -173,6 +175,7 @@ class BubblFlutterSdkPlugin :
         activity = binding.activity
         activityBinding = binding
         binding.addRequestPermissionsResultListener(this)
+        binding.addOnNewIntentListener(this)
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
@@ -189,8 +192,16 @@ class BubblFlutterSdkPlugin :
 
     private fun detachFromActivity() {
         activityBinding?.removeRequestPermissionsResultListener(this)
+        activityBinding?.removeOnNewIntentListener(this)
         activityBinding = null
         activity = null
+    }
+
+    override fun onNewIntent(intent: Intent): Boolean {
+        val payload = extractPayload(intent) ?: return false
+        clearNotificationExtras(intent)
+        emitNotification(payload)
+        return false
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -873,9 +884,10 @@ class BubblFlutterSdkPlugin :
             .registerReceiver(notificationReceiver, IntentFilter(NotificationRouter.BROADCAST))
         notificationBridgeRegistered = true
 
-        val coldStartPayload = activity?.intent?.getStringExtra("payload")
+        val coldStartPayload = extractPayload(activity?.intent)
         if (!coldStartPayload.isNullOrEmpty()) {
             emitNotification(coldStartPayload)
+            clearNotificationExtras(activity?.intent)
         }
     }
 
@@ -917,6 +929,95 @@ class BubblFlutterSdkPlugin :
             }
 
         emitEventOnMainThread(sink, payload)
+    }
+
+    private fun extractPayload(intent: Intent?): String? {
+        if (intent == null) {
+            return null
+        }
+
+        val payloadKeys = listOf("payload", "notification_payload", "data")
+        payloadKeys.forEach { key ->
+            intent.getStringExtra(key)?.takeIf { it.isNotBlank() }?.let { return it }
+            val value = intent.extras?.get(key) ?: return@forEach
+            when (value) {
+                is JSONObject -> return value.toString()
+                is JSONArray -> return value.toString()
+                is String -> if (value.isNotBlank()) return value
+            }
+        }
+
+        val extras = intent.extras ?: return null
+        if (!hasNotificationHint(extras)) {
+            return null
+        }
+        return bundleToJson(extras).toString()
+    }
+
+    private fun clearNotificationExtras(intent: Intent?) {
+        intent?.removeExtra("payload")
+        intent?.removeExtra("notification_payload")
+        intent?.removeExtra("data")
+    }
+
+    private fun hasNotificationHint(bundle: Bundle): Boolean {
+        if (bundle.isEmpty) {
+            return false
+        }
+
+        val keys = setOf(
+            "id",
+            "n_id",
+            "notification_id",
+            "notificationId",
+            "curatedNotificationID",
+            "curated_notification_id",
+            "locationId",
+            "location_id",
+            "headline",
+            "title",
+            "body",
+            "message",
+            "mediaUrl",
+            "media_url",
+            "mediaType",
+            "trigger",
+            "activation",
+            "campaign_id",
+            "campaignId",
+            "questions",
+            "survey_questions",
+            "aps",
+        )
+
+        return bundle.keySet().any { key ->
+            key in keys || key.startsWith("google.") || key.startsWith("gcm.")
+        }
+    }
+
+    private fun bundleToJson(bundle: Bundle): JSONObject {
+        val out = JSONObject()
+        bundle.keySet().forEach { key ->
+            val value = toJsonValue(bundle.get(key)) ?: return@forEach
+            out.put(key, value)
+        }
+        return out
+    }
+
+    private fun toJsonValue(value: Any?): Any? {
+        return when (value) {
+            null -> null
+            is Bundle -> bundleToJson(value)
+            is JSONObject, is JSONArray -> value
+            is Number, is Boolean, is String -> value
+            is Array<*> -> JSONArray().apply {
+                value.forEach { put(toJsonValue(it)) }
+            }
+            is Iterable<*> -> JSONArray().apply {
+                value.forEach { put(toJsonValue(it)) }
+            }
+            else -> value.toString()
+        }
     }
 
     private fun emitEventOnMainThread(sink: EventChannel.EventSink, payload: Any?) {

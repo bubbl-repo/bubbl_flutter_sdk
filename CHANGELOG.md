@@ -1,3 +1,8 @@
+## 2.2.1
+
+- Fixed Android push handling for nested payload envelopes (`payload`, `notification_payload`, `data`).
+- Added Android notification open-intent bridging so tapped pushes are emitted reliably to Flutter listeners.
+
 ## 2.2.0
 
 - Added robust iOS push payload compatibility for legacy and new keys.
