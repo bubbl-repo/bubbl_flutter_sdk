@@ -18,9 +18,6 @@ allprojects {
     repositories {
         google()
         mavenCentral()
-        maven {
-            url = uri("https://maven.bubbl.tech/repository/releases/")
-        }
     }
 }
 
@@ -74,7 +71,7 @@ android {
 }
 
 dependencies {
-    implementation("tech.bubbl:bubbl-sdk:2.1.0")
+    implementation("tech.bubbl.sdk:bubbl-sdk:2.2.1")
 
     implementation(platform("com.google.firebase:firebase-bom:33.5.1"))
     implementation("com.google.firebase:firebase-messaging")
