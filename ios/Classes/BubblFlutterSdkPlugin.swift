@@ -68,6 +68,9 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
   private var notificationOpenedObserver: NSObjectProtocol?
 
   private var pendingNotificationPayloads: [[String: Any]] = []
+  private let telemetryCacheQueue = DispatchQueue(label: "tech.bubbl.flutter.notification.telemetry")
+  private var notificationCampaignCache: [String: String] = [:]
+  private let notificationCampaignCacheLimit = 500
 
   private var deviceLogTimer: DispatchSourceTimer?
   private var lastDeviceLogFingerprint = ""
@@ -428,6 +431,8 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
   }
 
   private func emitNotificationPayload(_ payload: [String: Any]) {
+    cacheCampaignFromPayload(payload)
+
     if let sink = notificationSink {
       emitEventOnMainThread(sink, payload: payload)
       return
@@ -1178,6 +1183,151 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
     GeofenceService.shared.currentPolygons.count
   }
 
+  private func cacheCampaignFromPayload(_ payload: [String: Any]) {
+    let notificationId = firstStringValue(payload, keys: [
+      "curatedNotificationId",
+      "curated_notification_id",
+      "curatedNotificationID",
+      "notification_id",
+      "notificationId",
+      "id",
+    ])
+    let campaignId = firstStringValue(payload, keys: [
+      "campaignIdPrimary",
+      "campaign_id_primary",
+      "campaignId",
+      "campaign_id",
+    ])
+    cacheCampaignForNotification(notificationId: notificationId, campaignId: campaignId)
+  }
+
+  private func cacheCampaignForNotification(notificationId: String?, campaignId: String?) {
+    let normalizedNotificationId = notificationId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let normalizedCampaignId = campaignId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if normalizedNotificationId.isEmpty || normalizedCampaignId.isEmpty {
+      return
+    }
+
+    telemetryCacheQueue.sync {
+      notificationCampaignCache[normalizedNotificationId] = normalizedCampaignId
+      if notificationCampaignCache.count > notificationCampaignCacheLimit {
+        let overflow = notificationCampaignCache.count - notificationCampaignCacheLimit
+        let keysToDrop = Array(notificationCampaignCache.keys.prefix(overflow))
+        keysToDrop.forEach { notificationCampaignCache.removeValue(forKey: $0) }
+      }
+    }
+  }
+
+  private func cachedCampaignId(notificationId: String?) -> String? {
+    let normalizedNotificationId = notificationId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if normalizedNotificationId.isEmpty {
+      return nil
+    }
+
+    return telemetryCacheQueue.sync {
+      notificationCampaignCache[normalizedNotificationId]
+    }
+  }
+
+  private func normalizeTelemetryEventType(_ raw: String) -> String? {
+    let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    switch normalized {
+    case "notification_delivered",
+      "notification_sent",
+      "notification_opened",
+      "cta_clicked",
+      "cta_engagement",
+      "survey_completed",
+      "survey_submitted":
+      return normalized
+    default:
+      return nil
+    }
+  }
+
+  private func transmissionBaseURL(for environment: String) -> String {
+    let normalized = environment.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    if normalized == "PRODUCTION" {
+      return "https://transmission-layer.bubbl.tech"
+    }
+    return "https://transmission-layer-ts-staging.bubbl.tech"
+  }
+
+  private func postNotificationEventFallback(
+    curatedNotificationId: String,
+    campaignId: String?,
+    eventType: String
+  ) {
+    guard let tenant = loadTenantConfig() else {
+      return
+    }
+
+    guard let normalizedEventType = normalizeTelemetryEventType(eventType) else {
+      return
+    }
+
+    let normalizedNotificationId = curatedNotificationId.trimmingCharacters(in: .whitespacesAndNewlines)
+    if normalizedNotificationId.isEmpty {
+      return
+    }
+
+    let explicitCampaignId = campaignId?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let resolvedCampaignId = (explicitCampaignId?.isEmpty == false ? explicitCampaignId : nil)
+      ?? cachedCampaignId(notificationId: normalizedNotificationId)
+
+    guard let resolvedCampaignId, !resolvedCampaignId.isEmpty else {
+      NSLog(
+        "[Bubbl] notification-event fallback skipped: missing campaignId for notificationId=%@",
+        normalizedNotificationId
+      )
+      return
+    }
+
+    cacheCampaignForNotification(notificationId: normalizedNotificationId, campaignId: resolvedCampaignId)
+
+    let endpoint = "\(transmissionBaseURL(for: tenant.environment))/notification-event"
+    guard let url = URL(string: endpoint) else {
+      return
+    }
+
+    let payload: [String: Any] = [
+      "deviceId": currentDeviceIdentifier(),
+      "campaignId": resolvedCampaignId,
+      "curatedNotificationId": normalizedNotificationId,
+      "eventType": normalizedEventType,
+    ]
+
+    guard JSONSerialization.isValidJSONObject(payload),
+          let body = try? JSONSerialization.data(withJSONObject: payload, options: [])
+    else {
+      return
+    }
+
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.timeoutInterval = 6
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue(tenant.apiKey, forHTTPHeaderField: "x-api-key")
+    request.httpBody = body
+
+    URLSession.shared.dataTask(with: request) { _, response, error in
+      if let error {
+        NSLog("[Bubbl] notification-event fallback error: %@", error.localizedDescription)
+        return
+      }
+
+      if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+        NSLog(
+          "[Bubbl] notification-event fallback failed status=%ld eventType=%@ notificationId=%@",
+          http.statusCode,
+          normalizedEventType,
+          normalizedNotificationId
+        )
+      }
+    }.resume()
+  }
+
   // MARK: Geofence stream
 
   private func deriveGeofenceCircle(vertices: [CLLocationCoordinate2D]) -> GeofenceCircle? {
@@ -1506,9 +1656,15 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
       let args = call.arguments as? [String: Any] ?? [:]
 
       let curatedNotificationID = (args["curatedNotificationID"] as? String) ?? ""
+      let campaignId = firstStringValue(args, keys: ["campaignId", "campaign_id", "campaignIdPrimary"])
       let locationID = (args["locationID"] as? String) ?? ""
       let type = (args["type"] as? String) ?? ""
       let activity = (args["activity"] as? String) ?? ""
+      postNotificationEventFallback(
+        curatedNotificationId: curatedNotificationID,
+        campaignId: campaignId,
+        eventType: activity
+      )
 
       let parsedNotificationType = parseNotificationType(type)
       let parsedActivityType = parseActivityType(activity)
@@ -1549,7 +1705,13 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
     guardInitialized(result: result, functionName: "cta") {
       let args = call.arguments as? [String: Any] ?? [:]
       let notificationId = (args["notificationId"] as? NSNumber)?.intValue ?? 0
+      let campaignId = firstStringValue(args, keys: ["campaignId", "campaign_id", "campaignIdPrimary"])
       let locationId = (args["locationId"] as? String) ?? ""
+      postNotificationEventFallback(
+        curatedNotificationId: String(notificationId),
+        campaignId: campaignId,
+        eventType: "cta_clicked"
+      )
 
       if let parsedLocationID = Int(locationId) {
         NotificationManager.shared.trackCTAEngagement(
@@ -1574,8 +1736,14 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
     guardInitialized(result: result, functionName: "trackSurveyEvent") {
       let args = call.arguments as? [String: Any] ?? [:]
       let notificationId = (args["notificationId"] as? String) ?? ""
+      let campaignId = firstStringValue(args, keys: ["campaignId", "campaign_id", "campaignIdPrimary"])
       let locationId = (args["locationId"] as? String) ?? ""
       let activity = (args["activity"] as? String) ?? ""
+      postNotificationEventFallback(
+        curatedNotificationId: notificationId,
+        campaignId: campaignId,
+        eventType: activity
+      )
 
       BubblPlugin.shared.trackSurveyEvent(
         notificationId: notificationId,
@@ -1596,8 +1764,14 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
     guardInitialized(result: result, functionName: "submitSurveyResponse") {
       let args = call.arguments as? [String: Any] ?? [:]
       let notificationId = (args["notificationId"] as? String) ?? ""
+      let campaignId = firstStringValue(args, keys: ["campaignId", "campaign_id", "campaignIdPrimary"])
       let locationId = (args["locationId"] as? String) ?? ""
       let answers = (args["answers"] as? [NSDictionary]) ?? []
+      postNotificationEventFallback(
+        curatedNotificationId: notificationId,
+        campaignId: campaignId,
+        eventType: "survey_submitted"
+      )
 
       let parsedAnswers = parseSurveyAnswers(answers as NSArray)
 
@@ -1713,6 +1887,8 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
 
   private func parseActivityType(_ raw: String) -> ActivityType? {
     switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "cta_clicked":
+      return .ctaEngagement
     case "cta_engagement":
       return .ctaEngagement
     case "notification_sent":

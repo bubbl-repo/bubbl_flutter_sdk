@@ -48,12 +48,18 @@ class BubblConfiguration {
     required this.daysCount,
     required this.batteryCount,
     required this.privacyText,
+    this.frequencyCoolingPeriodSeconds,
+    this.frequencyMaxTriggers,
+    this.frequencyCtaSuspend,
   });
 
   final int notificationsCount;
   final int daysCount;
   final int batteryCount;
   final String privacyText;
+  final int? frequencyCoolingPeriodSeconds;
+  final int? frequencyMaxTriggers;
+  final bool? frequencyCtaSuspend;
 
   factory BubblConfiguration.fromMap(Map<String, dynamic> map) {
     return BubblConfiguration(
@@ -61,6 +67,10 @@ class BubblConfiguration {
       daysCount: (map['daysCount'] as num?)?.toInt() ?? 0,
       batteryCount: (map['batteryCount'] as num?)?.toInt() ?? 0,
       privacyText: map['privacyText'] as String? ?? '',
+      frequencyCoolingPeriodSeconds:
+          (map['frequencyCoolingPeriodSeconds'] as num?)?.toInt(),
+      frequencyMaxTriggers: (map['frequencyMaxTriggers'] as num?)?.toInt(),
+      frequencyCtaSuspend: map['frequencyCtaSuspend'] as bool?,
     );
   }
 }

@@ -47,6 +47,9 @@ import tech.bubbl.sdk.models.ChoiceSelection
 import tech.bubbl.sdk.models.SurveyAnswer
 import tech.bubbl.sdk.notifications.NotificationRouter
 import tech.bubbl.sdk.utils.Logger
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.charset.StandardCharsets
 import java.util.Locale
 
 private const val METHOD_CHANNEL_NAME = "tech.bubbl.sdk/methods"
@@ -94,6 +97,8 @@ class BubblFlutterSdkPlugin :
 
     private var deviceLogIntervalMs: Long = 2500L
     private var deviceLogMaxLines: Int = 80
+    private val telemetryCacheLock = Any()
+    private val notificationToCampaignCache = LinkedHashMap<String, String>()
 
     private val notificationReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -562,6 +567,27 @@ class BubblFlutterSdkPlugin :
                     "daysCount" to cfg.daysCount,
                     "batteryCount" to cfg.batteryCount,
                     "privacyText" to cfg.privacyText,
+                    "frequencyCoolingPeriodSeconds" to
+                        readOptionalIntProperty(
+                            cfg,
+                            "frequencyCoolingPeriodSeconds",
+                            "coolingPeriodSeconds",
+                            "frequency_cooling_period_seconds",
+                        ),
+                    "frequencyMaxTriggers" to
+                        readOptionalIntProperty(
+                            cfg,
+                            "frequencyMaxTriggers",
+                            "maximumTriggers",
+                            "frequency_max_triggers",
+                        ),
+                    "frequencyCtaSuspend" to
+                        readOptionalBooleanProperty(
+                            cfg,
+                            "frequencyCtaSuspend",
+                            "ctaSuspend",
+                            "frequency_cta_suspend",
+                        ),
                 ),
             )
         }
@@ -572,11 +598,17 @@ class BubblFlutterSdkPlugin :
             val payload = call.arguments as? Map<*, *> ?: emptyMap<String, Any?>()
 
             val curatedNotificationID = payload["curatedNotificationID"]?.toString() ?: ""
+            val campaignId = payload["campaignId"]?.toString() ?: payload["campaignID"]?.toString()
             val locationID = payload["locationID"]?.toString() ?: ""
             val type = payload["type"]?.toString() ?: ""
             val activityName = payload["activity"]?.toString() ?: ""
             val latitude = (payload["latitude"] as? Number)?.toDouble() ?: 0.0
             val longitude = (payload["longitude"] as? Number)?.toDouble() ?: 0.0
+            postNotificationEventFallback(
+                curatedNotificationId = curatedNotificationID,
+                campaignId = campaignId,
+                eventType = activityName,
+            )
 
             BubblSdk.sendEvent(
                 curatedNotificationID = curatedNotificationID,
@@ -594,7 +626,13 @@ class BubblFlutterSdkPlugin :
     private fun cta(call: MethodCall, result: MethodChannel.Result) {
         guarded(result, "cta") {
             val notificationId = (call.argument<Number>("notificationId")?.toInt() ?: 0)
+            val campaignId = call.argument<Any>("campaignId")?.toString()
             val locationId = call.argument<String>("locationId").orEmpty()
+            postNotificationEventFallback(
+                curatedNotificationId = notificationId.toString(),
+                campaignId = campaignId,
+                eventType = "cta_clicked",
+            )
             BubblSdk.cta(notificationId, locationId)
             result.success(true)
         }
@@ -603,8 +641,14 @@ class BubblFlutterSdkPlugin :
     private fun trackSurveyEvent(call: MethodCall, result: MethodChannel.Result) {
         guarded(result, "trackSurveyEvent") {
             val notificationId = call.argument<String>("notificationId") ?: ""
+            val campaignId = call.argument<Any>("campaignId")?.toString()
             val locationId = call.argument<String>("locationId") ?: ""
             val activityName = call.argument<String>("activity") ?: ""
+            postNotificationEventFallback(
+                curatedNotificationId = notificationId,
+                campaignId = campaignId,
+                eventType = activityName,
+            )
 
             BubblSdk.trackSurveyEvent(
                 notificationId = notificationId,
@@ -620,8 +664,14 @@ class BubblFlutterSdkPlugin :
         guarded(result, "submitSurveyResponse") {
             try {
                 val notificationId = call.argument<String>("notificationId") ?: ""
+                val campaignId = call.argument<Any>("campaignId")?.toString()
                 val locationId = call.argument<String>("locationId") ?: ""
                 val rawAnswers = call.argument<List<Any?>>("answers") ?: emptyList()
+                postNotificationEventFallback(
+                    curatedNotificationId = notificationId,
+                    campaignId = campaignId,
+                    eventType = "survey_submitted",
+                )
 
                 val answers = mutableListOf<SurveyAnswer>()
                 rawAnswers.forEach { item ->
@@ -676,6 +726,74 @@ class BubblFlutterSdkPlugin :
                 "environment" to cfg.environment.name,
             ),
         )
+    }
+
+    private fun readOptionalIntProperty(target: Any, vararg names: String): Int? {
+        for (name in names) {
+            runCatching {
+                val getterName = "get${name.replaceFirstChar(Char::titlecase)}"
+                val method = target.javaClass.methods.firstOrNull {
+                    it.parameterCount == 0 && it.name.equals(getterName, ignoreCase = true)
+                }
+                val value = method?.invoke(target)
+                when (value) {
+                    is Number -> value.toInt()
+                    is String -> value.toIntOrNull()
+                    else -> null
+                }
+            }.getOrNull()?.let { return it }
+
+            runCatching {
+                val field = target.javaClass.declaredFields.firstOrNull {
+                    it.name.equals(name, ignoreCase = true)
+                }
+                field?.isAccessible = true
+                val value = field?.get(target)
+                when (value) {
+                    is Number -> value.toInt()
+                    is String -> value.toIntOrNull()
+                    else -> null
+                }
+            }.getOrNull()?.let { return it }
+        }
+
+        return null
+    }
+
+    private fun readOptionalBooleanProperty(target: Any, vararg names: String): Boolean? {
+        for (name in names) {
+            runCatching {
+                val capitalized = name.replaceFirstChar(Char::titlecase)
+                val getter = target.javaClass.methods.firstOrNull {
+                    it.parameterCount == 0 &&
+                        (it.name.equals("is$capitalized", ignoreCase = true) ||
+                            it.name.equals("get$capitalized", ignoreCase = true))
+                }
+                val value = getter?.invoke(target)
+                when (value) {
+                    is Boolean -> value
+                    is Number -> value.toInt() == 1
+                    is String -> value.equals("true", ignoreCase = true) || value == "1"
+                    else -> null
+                }
+            }.getOrNull()?.let { return it }
+
+            runCatching {
+                val field = target.javaClass.declaredFields.firstOrNull {
+                    it.name.equals(name, ignoreCase = true)
+                }
+                field?.isAccessible = true
+                val value = field?.get(target)
+                when (value) {
+                    is Boolean -> value
+                    is Number -> value.toInt() == 1
+                    is String -> value.equals("true", ignoreCase = true) || value == "1"
+                    else -> null
+                }
+            }.getOrNull()?.let { return it }
+        }
+
+        return null
     }
 
     private fun setTenantConfig(call: MethodCall, result: MethodChannel.Result) {
@@ -908,18 +1026,41 @@ class BubblFlutterSdkPlugin :
         val payload =
             runCatching {
                 val jsonObject = JSONObject(json)
+                cacheCampaignForNotification(
+                    notificationId = firstPresentValueAsString(
+                        jsonObject,
+                        "curatedNotificationId",
+                        "curated_notification_id",
+                        "curatedNotificationID",
+                        "notification_id",
+                        "notificationId",
+                        "id",
+                    ),
+                    campaignId = firstPresentValueAsString(
+                        jsonObject,
+                        "campaignIdPrimary",
+                        "campaign_id_primary",
+                        "campaignId",
+                        "campaign_id",
+                    ),
+                )
                 val map = mutableMapOf<String, Any?>()
 
-                map["id"] = if (jsonObject.has("id") && !jsonObject.isNull("id")) jsonObject.optInt("id") else null
-                map["headline"] = jsonObject.optNullableString("headline")
-                map["body"] = jsonObject.optNullableString("body")
-                map["mediaUrl"] = jsonObject.optNullableString("mediaUrl")
-                map["mediaType"] = jsonObject.optNullableString("mediaType")
-                map["activation"] = jsonObject.optNullableString("activation")
-                map["ctaLabel"] = jsonObject.optNullableString("ctaLabel")
-                map["ctaUrl"] = jsonObject.optNullableString("ctaUrl")
-                map["locationId"] = jsonObject.optNullableString("locationId")
-                map["postMessage"] = jsonObject.optNullableString("postMessage")
+                map["id"] = firstPresentValue(jsonObject, "id", "n_id", "notification_id", "notificationId", "curatedNotificationID", "curated_notification_id")
+                map["headline"] = firstPresentValueAsString(jsonObject, "headline", "title", "notificationTitle")
+                map["body"] = firstPresentValueAsString(jsonObject, "body", "message", "notificationBody")
+                map["mediaUrl"] = firstPresentValueAsString(jsonObject, "mediaUrl", "mediaURL", "media_url")
+                map["mediaType"] = firstPresentValueAsString(jsonObject, "mediaType", "media_type")
+                map["activation"] = firstPresentValueAsString(jsonObject, "activation", "geofence_activation", "geofenceActivation", "trigger")
+                map["ctaLabel"] = firstPresentValueAsString(jsonObject, "ctaLabel", "cta_label")
+                map["ctaUrl"] = firstPresentValueAsString(jsonObject, "ctaUrl", "cta_url")
+                map["locationId"] = firstPresentValueAsString(jsonObject, "locationId", "location_id", "locationID")
+                map["campaignIdPrimary"] = firstPresentValue(jsonObject, "campaignIdPrimary", "campaign_id_primary", "campaignId", "campaign_id")
+                map["curatedNotificationId"] = firstPresentValue(jsonObject, "curatedNotificationId", "curated_notification_id", "curatedNotificationID", "notification_id", "notificationId")
+                map["coolingPeriodSeconds"] = firstPresentValue(jsonObject, "coolingPeriodSeconds", "cooling_period_seconds")
+                map["maximumTriggers"] = firstPresentValue(jsonObject, "maximumTriggers", "maximum_triggers")
+                map["ctaSuspend"] = firstPresentValue(jsonObject, "ctaSuspend", "cta_suspend")
+                map["postMessage"] = firstPresentValueAsString(jsonObject, "postMessage", "post_message", "completion_message", "completionMessage")
                 map["questions"] =
                     jsonObject.optJSONArray("questions")?.let(::jsonQuestionsToList) ?: emptyList<Map<String, Any?>>()
                 map["raw"] = json
@@ -1033,6 +1174,132 @@ class BubblFlutterSdkPlugin :
 
     private fun JSONObject.optNullableString(key: String): String? {
         return if (!has(key) || isNull(key)) null else optString(key)
+    }
+
+    private fun firstPresentValue(jsonObject: JSONObject, vararg keys: String): Any? {
+        keys.forEach { key ->
+            if (jsonObject.has(key) && !jsonObject.isNull(key)) {
+                return jsonObject.opt(key)
+            }
+        }
+        return null
+    }
+
+    private fun firstPresentValueAsString(jsonObject: JSONObject, vararg keys: String): String? {
+        val value = firstPresentValue(jsonObject, *keys) ?: return null
+        return when (value) {
+            is String -> value
+            is Number -> value.toString()
+            is Boolean -> value.toString()
+            else -> value.toString()
+        }.takeIf { it.isNotBlank() }
+    }
+
+    private fun cacheCampaignForNotification(notificationId: String?, campaignId: String?) {
+        val normalizedNotificationId = notificationId?.trim().orEmpty()
+        val normalizedCampaignId = campaignId?.trim().orEmpty()
+        if (normalizedNotificationId.isEmpty() || normalizedCampaignId.isEmpty()) {
+            return
+        }
+
+        synchronized(telemetryCacheLock) {
+            notificationToCampaignCache[normalizedNotificationId] = normalizedCampaignId
+            while (notificationToCampaignCache.size > 500) {
+                val oldestKey = notificationToCampaignCache.entries.firstOrNull()?.key ?: break
+                notificationToCampaignCache.remove(oldestKey)
+            }
+        }
+    }
+
+    private fun cachedCampaignId(notificationId: String?): String? {
+        val normalizedNotificationId = notificationId?.trim().orEmpty()
+        if (normalizedNotificationId.isEmpty()) {
+            return null
+        }
+
+        synchronized(telemetryCacheLock) {
+            return notificationToCampaignCache[normalizedNotificationId]
+        }
+    }
+
+    private fun normalizeTelemetryEventType(raw: String?): String? {
+        return when (raw?.trim()?.lowercase(Locale.US)) {
+            "notification_delivered", "notification_sent", "notification_opened",
+            "cta_clicked", "cta_engagement",
+            "survey_completed", "survey_submitted" -> raw.trim().lowercase(Locale.US)
+            else -> null
+        }
+    }
+
+    private fun resolveTransmissionBaseUrl(environment: Environment): String {
+        return when (environment) {
+            Environment.PRODUCTION -> "https://transmission-layer.bubbl.tech/"
+            else -> "https://transmission-layer-ts-staging.bubbl.tech/"
+        }
+    }
+
+    private fun postNotificationEventFallback(
+        curatedNotificationId: String?,
+        campaignId: String?,
+        eventType: String?,
+    ) {
+        val normalizedEventType = normalizeTelemetryEventType(eventType) ?: return
+        val tenantConfig = TenantConfigStore.load(applicationContext) ?: return
+        val normalizedNotificationId = curatedNotificationId?.trim().orEmpty()
+        if (normalizedNotificationId.isEmpty()) {
+            return
+        }
+
+        val resolvedCampaignId = campaignId?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: cachedCampaignId(normalizedNotificationId)
+        if (resolvedCampaignId.isNullOrBlank()) {
+            Logger.log(
+                "BubblFlutterSdkPlugin",
+                "notification-event fallback skipped: missing campaignId for notificationId=$normalizedNotificationId",
+            )
+            return
+        }
+
+        cacheCampaignForNotification(normalizedNotificationId, resolvedCampaignId)
+
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                val endpoint = resolveTransmissionBaseUrl(tenantConfig.environment).trimEnd('/') + "/notification-event"
+                val body = JSONObject().apply {
+                    put("deviceId", currentDeviceId())
+                    put("campaignId", resolvedCampaignId)
+                    put("curatedNotificationId", normalizedNotificationId)
+                    put("eventType", normalizedEventType)
+                }
+
+                val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 6000
+                    readTimeout = 6000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("Accept", "application/json")
+                    setRequestProperty("x-api-key", tenantConfig.apiKey)
+                }
+
+                connection.outputStream.use { stream ->
+                    val bytes = body.toString().toByteArray(StandardCharsets.UTF_8)
+                    stream.write(bytes)
+                    stream.flush()
+                }
+
+                val statusCode = connection.responseCode
+                if (statusCode !in 200..299) {
+                    Logger.log(
+                        "BubblFlutterSdkPlugin",
+                        "notification-event fallback failed status=$statusCode eventType=$normalizedEventType notificationId=$normalizedNotificationId",
+                    )
+                }
+                connection.disconnect()
+            }.onFailure { error ->
+                Logger.log("BubblFlutterSdkPlugin", "notification-event fallback error: ${error.message}")
+            }
+        }
     }
 
     private fun jsonQuestionsToList(array: JSONArray): List<Map<String, Any?>> {

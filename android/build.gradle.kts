@@ -71,7 +71,7 @@ android {
 }
 
 dependencies {
-    implementation("tech.bubbl.sdk:bubbl-sdk:2.2.1")
+    implementation("tech.bubbl.sdk:bubbl-sdk:2.2.6")
 
     implementation(platform("com.google.firebase:firebase-bom:33.5.1"))
     implementation("com.google.firebase:firebase-messaging")

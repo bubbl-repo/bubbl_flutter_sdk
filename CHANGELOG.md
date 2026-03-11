@@ -1,3 +1,13 @@
+## 2.2.7
+
+- Added explicit plugin-level fallback telemetry posting to transmission `/notification-event` for `sendEvent`, `cta`, `trackSurveyEvent`, and `submitSurveyResponse`.
+- Added notification-to-campaign cache in native bridges so telemetry can include `campaignId` when events are emitted after payload receipt.
+- Added payload normalization support for campaign frequency fields (`coolingPeriodSeconds`, `maximumTriggers`, `ctaSuspend`) in notification event payloads.
+
+## 2.2.6
+
+- Updated bundled native SDK pins to `2.2.6` on both Android (`tech.bubbl.sdk:bubbl-sdk`) and iOS (`BubblSDK` pod).
+
 ## 2.2.1
 
 - Fixed Android push handling for nested payload envelopes (`payload`, `notification_payload`, `data`).

@@ -24,7 +24,7 @@ dependencies:
 ## Android requirements
 
 - Min SDK 27+
-- Add Maven Central dependency `tech.bubbl.sdk:bubbl-sdk:2.2.1` (no credentials required)
+- Add Maven Central dependency `tech.bubbl.sdk:bubbl-sdk:2.2.6` (no credentials required)
 - Add Firebase setup in host app (`google-services.json`)
 - Ensure `google-services.json` includes your exact Android `applicationId` (example app uses `tech.bubbl.flutter`)
 
