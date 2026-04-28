@@ -168,6 +168,10 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
       notificationPermissionGranted(result: result)
     case "requestPushPermission":
       requestPushPermission(result: result)
+    case "updateFcmToken":
+      updateFcmToken(call, result: result)
+    case "updateApnsToken":
+      updateApnsToken(call, result: result)
     case "startLocationTracking":
       startLocationTracking(result: result)
     case "refreshGeofence":
@@ -201,7 +205,7 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
       }
     case "clearCachedCampaigns":
       guardInitialized(result: result, functionName: "clearCachedCampaigns") {
-        result(true)
+        result(clearCachedCampaignsInternal())
       }
     case "getApiKey":
       result(UserDefaults.standard.string(forKey: Keys.tenantApiKey) ?? "")
@@ -1109,6 +1113,79 @@ public class BubblFlutterSdkPlugin: NSObject, FlutterPlugin, BubblPluginDelegate
     locationAuthorizationSubscription = nil
     locationAuthorizationTimeout?.cancel()
     locationAuthorizationTimeout = nil
+  }
+
+  private func updateFcmToken(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guardInitialized(result: result, functionName: "updateFcmToken") {
+      let args = call.arguments as? [String: Any] ?? [:]
+      let token = (args["token"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      guard !token.isEmpty else {
+        result(FlutterError(code: "BUBBL_TOKEN_FAILED", message: "token is required.", details: nil))
+        return
+      }
+
+      BubblPlugin.updateFCMToken(token)
+      result(true)
+    }
+  }
+
+  private func updateApnsToken(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guardInitialized(result: result, functionName: "updateApnsToken") {
+      let args = call.arguments as? [String: Any] ?? [:]
+      let hexToken = (args["hexToken"] as? String)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: " ", with: "")
+        .replacingOccurrences(of: "<", with: "")
+        .replacingOccurrences(of: ">", with: "") ?? ""
+
+      guard !hexToken.isEmpty else {
+        result(FlutterError(code: "BUBBL_TOKEN_FAILED", message: "hexToken is required.", details: nil))
+        return
+      }
+
+      guard let data = dataFromHexString(hexToken) else {
+        result(FlutterError(code: "BUBBL_TOKEN_FAILED", message: "hexToken must be valid hexadecimal.", details: nil))
+        return
+      }
+
+      BubblPlugin.updateAPNsToken(data)
+      result(true)
+    }
+  }
+
+  private func dataFromHexString(_ hex: String) -> Data? {
+    let cleaned = hex.count.isMultiple(of: 2) ? hex : "0" + hex
+    var bytes = [UInt8]()
+    bytes.reserveCapacity(cleaned.count / 2)
+
+    var index = cleaned.startIndex
+    while index < cleaned.endIndex {
+      let nextIndex = cleaned.index(index, offsetBy: 2)
+      guard nextIndex <= cleaned.endIndex else { return nil }
+      let pair = cleaned[index..<nextIndex]
+      guard let byte = UInt8(pair, radix: 16) else { return nil }
+      bytes.append(byte)
+      index = nextIndex
+    }
+
+    return Data(bytes)
+  }
+
+  private func clearCachedCampaignsInternal() -> Bool {
+    let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("bubbl-geofences.json")
+
+    do {
+      if FileManager.default.fileExists(atPath: cacheURL.path) {
+        try FileManager.default.removeItem(at: cacheURL)
+      }
+
+      emitGeofenceSnapshot(polygons: [])
+      return true
+    } catch {
+      NSLog("[Bubbl] Failed to clear cached campaigns: %@", error.localizedDescription)
+      return false
+    }
   }
 
   private func serializeJSON(_ value: Any) -> String? {

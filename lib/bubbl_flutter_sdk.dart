@@ -68,6 +68,14 @@ class BubblFlutterSdk {
     return BubblFlutterSdkPlatform.instance.requestPushPermission();
   }
 
+  Future<bool> updateFcmToken(String token) {
+    return BubblFlutterSdkPlatform.instance.updateFcmToken(token);
+  }
+
+  Future<bool> updateApnsToken(String hexToken) {
+    return BubblFlutterSdkPlatform.instance.updateApnsToken(hexToken);
+  }
+
   Future<bool> startLocationTracking() {
     return BubblFlutterSdkPlatform.instance.startLocationTracking();
   }

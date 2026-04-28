@@ -21,3 +21,4 @@ pubspec.lock
 build/
 coverage/
 internal.md
+NATIVE_SYNC_GAPS.md

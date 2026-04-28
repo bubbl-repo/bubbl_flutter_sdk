@@ -1,3 +1,10 @@
+## 2.4.0
+
+- Bumped native Android and iOS SDK dependencies to `2.4.0`.
+- Fixed Flutter `development` environment mapping to target Android `NIGHTLY` instead of `STAGING`.
+- Added Flutter APIs for forwarding FCM and APNs device tokens to the native SDKs.
+- Improved `clearCachedCampaigns()` on iOS and documented remaining platform behavior differences.
+
 ## 2.2.1
 
 - Fixed Android push handling for nested payload envelopes (`payload`, `notification_payload`, `data`).

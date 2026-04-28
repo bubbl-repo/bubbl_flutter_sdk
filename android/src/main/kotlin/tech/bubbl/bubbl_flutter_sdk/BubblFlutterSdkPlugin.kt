@@ -212,6 +212,8 @@ class BubblFlutterSdkPlugin :
             "locationGranted" -> result.success(locationGranted())
             "notificationGranted" -> result.success(notificationGranted())
             "requestPushPermission" -> requestPushPermission(result)
+            "updateFcmToken" -> updateFcmToken(call, result)
+            "updateApnsToken" -> result.success(false)
             "startLocationTracking" -> startLocationTracking(result)
             "refreshGeofence" -> refreshGeofence(call, result)
             "updateSegments" -> updateSegments(call, result)
@@ -475,6 +477,19 @@ class BubblFlutterSdkPlugin :
             } catch (t: Throwable) {
                 result.error("BUBBL_START_LOCATION_FAILED", t.message, null)
             }
+        }
+    }
+
+    private fun updateFcmToken(call: MethodCall, result: MethodChannel.Result) {
+        guarded(result, "updateFcmToken") {
+            val token = call.argument<String>("token")?.trim().orEmpty()
+            if (token.isEmpty()) {
+                result.error("BUBBL_TOKEN_FAILED", "token is required.", null)
+                return@guarded
+            }
+
+            BubblSdk.syncFcmToken(applicationContext, token)
+            result.success(true)
         }
     }
 
@@ -1134,6 +1149,7 @@ class BubblFlutterSdkPlugin :
 
     private fun parseEnvironment(raw: String?): Environment {
         return when (raw?.trim()?.uppercase(Locale.US)) {
+            "DEVELOPMENT" -> Environment.NIGHTLY
             "PRODUCTION" -> Environment.PRODUCTION
             else -> Environment.STAGING
         }

@@ -66,6 +66,14 @@ abstract class BubblFlutterSdkPlatform extends PlatformInterface {
     );
   }
 
+  Future<bool> updateFcmToken(String token) {
+    throw UnimplementedError('updateFcmToken() has not been implemented.');
+  }
+
+  Future<bool> updateApnsToken(String hexToken) {
+    throw UnimplementedError('updateApnsToken() has not been implemented.');
+  }
+
   Future<bool> startLocationTracking() {
     throw UnimplementedError(
       'startLocationTracking() has not been implemented.',

@@ -108,6 +108,18 @@ class MethodChannelBubblFlutterSdk extends BubblFlutterSdkPlatform {
   }
 
   @override
+  Future<bool> updateFcmToken(String token) async {
+    return _invokeBool('updateFcmToken', <String, dynamic>{'token': token});
+  }
+
+  @override
+  Future<bool> updateApnsToken(String hexToken) async {
+    return _invokeBool('updateApnsToken', <String, dynamic>{
+      'hexToken': hexToken,
+    });
+  }
+
+  @override
   Future<bool> startLocationTracking() async {
     return _invokeBool('startLocationTracking');
   }

@@ -178,4 +178,15 @@ enum BubblEnvironment {
         return 'PRODUCTION';
     }
   }
+
+  String get nativeIntentDescription {
+    switch (this) {
+      case BubblEnvironment.development:
+        return 'iOS development / Android nightly';
+      case BubblEnvironment.staging:
+        return 'staging';
+      case BubblEnvironment.production:
+        return 'production';
+    }
+  }
 }
